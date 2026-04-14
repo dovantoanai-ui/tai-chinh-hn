@@ -434,7 +434,10 @@ body{font-family:'Be Vietnam Pro',sans-serif;background:var(--bg);color:var(--tx
     </div>
   </div>
   <div class="pad" id="tc-list"></div>
-  <div class="fab-wrap"><button class="fab" onclick="openTcNew()">+</button></div>
+  <div class="fab-wrap" style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;">
+    <button onclick="openTcBulk()" style="width:44px;height:44px;border-radius:13px;border:none;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.2);color:#fff;background:var(--bl);" title="Up hang loat">=</button>
+    <button class="fab" onclick="openTcNew()">+</button>
+  </div>
 </div>
 
 <!-- SCREEN MUA HANG -->
@@ -3260,10 +3263,271 @@ function doLogin(){
   }
 }
 
+
+// == BULK UPLOAD THU CHI ==
+var tcbData=[];
+var tcbTab='paste';
+
+function openTcBulk(){
+  tcbData=[];
+  tcbTab='paste';
+  tcbSetTab('paste');
+  document.getElementById('tcb-paste-area').value='';
+  document.getElementById('tcb-preview-wrap').style.display='none';
+  document.getElementById('ov-tc-bulk').classList.add('on');
+}
+
+function tcbSetTab(t){
+  tcbTab=t;
+  ['paste','csv','xlsx'].forEach(function(x){
+    document.getElementById('tcb-tab-'+x).className='imp-tab'+(x===t?' on':'');
+    document.getElementById('tcb-pane-'+x).style.display=x===t?'block':'none';
+  });
+  document.getElementById('tcb-preview-wrap').style.display='none';
+  tcbData=[];
+}
+
+// Parse ngay linh hoat: DD/MM/YYYY, YYYY-MM-DD, D/M/YYYY
+function tcbParseDate(s){
+  s=(s||'').trim();
+  var m1=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  if(m1)return m1[3]+'-'+String(m1[2]).padStart(2,'0')+'-'+String(m1[1]).padStart(2,'0');
+  var m2=s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if(m2)return m2[1]+'-'+String(m2[2]).padStart(2,'0')+'-'+String(m2[3]).padStart(2,'0');
+  // Excel serial number
+  var num=parseInt(s);
+  if(!isNaN(num)&&num>40000&&num<60000){
+    var d=new Date((num-25569)*86400000);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  }
+  return '';
+}
+
+function tcbParseType(s){
+  s=(s||'').trim().toLowerCase();
+  if(s==='thu'||s==='1'||s.indexOf('thu')===0)return 'thu';
+  if(s==='chi'||s==='0'||s.indexOf('chi')===0)return 'chi';
+  return '';
+}
+
+function tcbParseRows(lines){
+  var results=[];
+  var today=todayStr();
+  lines.forEach(function(line,idx){
+    line=line.trim();
+    if(!line)return;
+    // Auto-detect delimiter: tab or comma
+    var sep=line.indexOf('\t')>=0?'\t':',';
+    var cols=line.split(sep).map(function(v){return v.replace(/^"|"$/g,'').trim();});
+    if(cols.length<2)return;
+    // Check if header row
+    var c0=(cols[0]||'').toLowerCase();
+    if(idx===0&&(c0==='ngay'||c0==='date'||c0==='stt'||c0===''))return;
+
+    var entry={_row:idx+1,_ok:true,_err:''};
+    // 6 cols: Ngay | Thu/Chi | DoiTuong | SoTien | PhuongThuc | GhiChu
+    entry.date=tcbParseDate(cols[0])||today;
+    if(!tcbParseDate(cols[0]))entry._warn='Ngay '+cols[0]+' khong hop le, dung hom nay';
+    entry.type=tcbParseType(cols[1]);
+    if(!entry.type){entry._ok=false;entry._err='Cot 2 phai la Thu hoac Chi';}
+    entry.doi_tuong=(cols[2]||'').trim();
+    entry.so_tien=parseFloat((cols[3]||'').replace(/[^0-9.-]/g,''))||0;
+    if(!entry.so_tien){entry._ok=false;entry._err='So tien = 0';}
+    var pm=(cols[4]||'').trim().toUpperCase();
+    entry.phuong_thuc=(pm==='CK'||pm==='NGAN HANG'||pm==='NH')?'CK':'TM';
+    entry.ghi_chu=(cols[5]||'').trim();
+    results.push(entry);
+  });
+  return results;
+}
+
+function tcbParse(){
+  var raw=document.getElementById('tcb-paste-area').value;
+  var lines=raw.split('\n').filter(function(l){return l.trim();});
+  tcbData=tcbParseRows(lines);
+  tcbShowPreview();
+}
+
+function tcbReadCsv(inp){
+  if(!inp.files||!inp.files[0])return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var lines=e.target.result.replace(/\r/g,'').split('\n').filter(function(l){return l.trim();});
+    tcbData=tcbParseRows(lines);
+    tcbShowPreview();
+  };
+  reader.readAsText(inp.files[0],'UTF-8');
+  inp.value='';
+}
+
+function tcbReadXlsx(inp){
+  if(!inp.files||!inp.files[0])return;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      var wb=XLSX.read(e.target.result,{type:'binary'});
+      var ws=wb.Sheets[wb.SheetNames[0]];
+      var rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+      var lines=rows.map(function(r){return r.join('\t');}).filter(function(l){return l.trim();});
+      tcbData=tcbParseRows(lines);
+      tcbShowPreview();
+    }catch(err){toast('Loi doc file Excel: '+err.message);}
+  };
+  reader.readAsBinaryString(inp.files[0]);
+  inp.value='';
+}
+
+function tcbShowPreview(){
+  var ok=tcbData.filter(function(r){return r._ok;});
+  var err=tcbData.filter(function(r){return !r._ok;});
+  var stat='<span style="padding:3px 10px;border-radius:20px;font-weight:700;background:var(--grb);color:var(--gr);">'+ok.length+' hop le</span>';
+  if(err.length)stat+=' <span style="padding:3px 10px;border-radius:20px;font-weight:700;background:var(--reb);color:var(--re);">'+err.length+' loi</span>';
+  document.getElementById('tcb-stat').innerHTML=stat;
+
+  var html='';
+  tcbData.forEach(function(r){
+    var bg=r._ok?'border-left:3px solid var(--gr)':'border-left:3px solid var(--re)';
+    html+='<div style="'+bg+';padding:6px 10px;margin-bottom:3px;background:var(--sf);border-radius:6px;border:1px solid var(--bd);">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:center;">';
+    html+='<span style="font-size:11px;color:var(--mu);">Dong '+r._row+' &nbsp;|&nbsp; '+(r.date||'?')+' &nbsp;|&nbsp; <b style="color:'+(r.type==='thu'?'var(--gr)':'var(--re)')+';">'+(r.type||'?')+'</b></span>';
+    html+='<span style="font-size:12px;font-weight:700;color:'+(r.type==='thu'?'var(--gr)':'var(--re)')+';">'+fmt(r.so_tien)+'</span>';
+    html+='</div>';
+    if(r.doi_tuong||r.ghi_chu)html+='<div style="font-size:11px;color:var(--mu);margin-top:2px;">'+(r.doi_tuong||'')+(r.ghi_chu?' &mdash; '+r.ghi_chu:'')+'</div>';
+    if(r._err)html+='<div style="font-size:11px;color:var(--re);margin-top:2px;">Loi: '+r._err+'</div>';
+    if(r._warn)html+='<div style="font-size:11px;color:var(--am);margin-top:2px;">'+r._warn+'</div>';
+    html+='</div>';
+  });
+
+  document.getElementById('tcb-preview').innerHTML=html||'<div style="padding:12px;color:var(--mu);text-align:center;">Chua co du lieu</div>';
+  document.getElementById('tcb-preview-wrap').style.display=tcbData.length?'block':'none';
+  document.getElementById('tcb-save-btn').textContent='Luu '+ok.length+' phieu vao app';
+  document.getElementById('tcb-save-btn').disabled=!ok.length;
+}
+
+function tcbSaveAll(){
+  var ok=tcbData.filter(function(r){return r._ok;});
+  if(!ok.length)return toast('Khong co phieu hop le!');
+
+  // Group by date
+  var byDate={};
+  ok.forEach(function(r){
+    var dt=r.date;
+    if(!byDate[dt])byDate[dt]=ld(kTc(dt),[]);
+    byDate[dt].push({
+      id:uid(),date:dt,type:r.type,
+      doi_tuong:r.doi_tuong,so_tien:r.so_tien,
+      phuong_thuc:r.phuong_thuc,ghi_chu:r.ghi_chu
+    });
+  });
+
+  // Save each date group
+  Object.keys(byDate).forEach(function(dt){
+    sv(kTc(dt),byDate[dt]);
+  });
+
+  closeOv('ov-tc-bulk');
+  renderTc();renderHome();
+  toast('Da luu '+ok.length+' phieu thu chi!');
+  tcbData=[];
+}
+
+function tcbDownloadMau(){
+  var mau='Ngay,Thu_Chi,Doi_tuong,So_tien,Phuong_thuc,Ghi_chu\n';
+  mau+='14/04/2026,Thu,Khach Le Thi A,5000000,TM,Ban hang le\n';
+  mau+='14/04/2026,Chi,NCC Bot Thinh,2000000,TM,Mua NVL\n';
+  mau+='14/04/2026,Thu,Chuyen khoan KH B,3500000,CK,Thu tien hang';
+  var blob=new Blob([mau],{type:'text/csv;charset=utf-8;'});
+  var url=URL.createObjectURL(blob);
+  var a=document.createElement('a');
+  a.href=url;a.download='mau_thu_chi.csv';
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},200);
+}
+
+// fix button name
+function tcBulkDownloadMau(){tcbDownloadMau();}
+
 // == INIT ==
 checkAuth();
 initKho();
 document.getElementById('sc-home').classList.add('on');
 </script>
+
+<!-- MODAL: BULK UPLOAD THU CHI -->
+<div id="ov-tc-bulk" class="overlay">
+  <div class="modal" style="padding-bottom:32px;">
+    <div style="display:flex;align-items:center;margin-bottom:14px;">
+      <div style="flex:1;">
+        <div class="modal-ttl" style="margin-bottom:2px;">Up hang loat Thu Chi</div>
+        <div style="font-size:12px;color:var(--mu);">Dan tu Excel hoac chon file CSV/Excel</div>
+      </div>
+      <button onclick="closeOv('ov-tc-bulk')" style="width:32px;height:32px;border-radius:8px;border:1.5px solid var(--bd2);background:var(--bg);font-size:18px;cursor:pointer;color:var(--mu);display:flex;align-items:center;justify-content:center;">x</button>
+    </div>
+
+    <!-- Format huong dan -->
+    <div style="background:var(--blb);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--bl);margin-bottom:12px;line-height:1.8;">
+      <b>Format cot (6 cot, phan cach Tab hoac phay):</b><br>
+      <code style="font-size:11px;background:rgba(0,0,0,.06);padding:2px 6px;border-radius:4px;">Ngay | Thu/Chi | Doi_tuong | So_tien | TM/CK | Ghi_chu</code><br>
+      <span style="color:#1565c0;">Ngay: DD/MM/YYYY hoac YYYY-MM-DD &nbsp;|&nbsp; Dong dau la header se bi bo qua</span>
+    </div>
+
+    <!-- Tai mau Excel -->
+    <div style="text-align:center;margin-bottom:12px;">
+      <button onclick="tcBulkDownloadMau()" style="padding:8px 16px;border-radius:8px;border:1.5px solid var(--bl);background:var(--blb);color:var(--bl);font-size:12px;font-weight:700;cursor:pointer;font-family:sans-serif;">Tai file mau CSV</button>
+    </div>
+
+    <!-- 3 tab nhap lieu -->
+    <div class="imp-tabs" style="margin-bottom:12px;">
+      <button class="imp-tab on" id="tcb-tab-paste" onclick="tcbSetTab('paste')">Dan tu Excel</button>
+      <button class="imp-tab" id="tcb-tab-csv" onclick="tcbSetTab('csv')">File CSV</button>
+      <button class="imp-tab" id="tcb-tab-xlsx" onclick="tcbSetTab('xlsx')">File Excel</button>
+    </div>
+
+    <!-- PANE: Dan tu Excel -->
+    <div id="tcb-pane-paste">
+      <textarea id="tcb-paste-area" rows="7"
+        placeholder="Dan du lieu tu Excel vao day (Tab-separated)...
+Vi du:
+14/04/2026&#9;Thu&#9;Khach A&#9;5000000&#9;TM&#9;Ban hang le
+14/04/2026&#9;Chi&#9;NCC Nem&#9;2000000&#9;TM&#9;Mua NVL"
+        style="width:100%;padding:12px;border:1.5px solid var(--bd2);border-radius:10px;
+        font-size:13px;outline:none;background:var(--bg);resize:vertical;
+        box-sizing:border-box;font-family:monospace;color:var(--tx);margin-bottom:8px;"
+        oninput="tcbParse()"></textarea>
+    </div>
+
+    <!-- PANE: File CSV -->
+    <div id="tcb-pane-csv" style="display:none;">
+      <div class="imp-drop" onclick="document.getElementById('tcb-csv-inp').click()" style="margin-bottom:8px;">
+        <div class="imp-drop-ico">&#128196;</div>
+        <div style="font-weight:600;">Chon file CSV</div>
+        <div style="font-size:11px;margin-top:4px;color:var(--mu);">6 cot: Ngay | Thu/Chi | Doi tuong | So tien | TM/CK | Ghi chu</div>
+      </div>
+      <input type="file" id="tcb-csv-inp" accept=".csv,.txt" style="display:none;" onchange="tcbReadCsv(this)">
+    </div>
+
+    <!-- PANE: File Excel -->
+    <div id="tcb-pane-xlsx" style="display:none;">
+      <div class="imp-drop" onclick="document.getElementById('tcb-xlsx-inp').click()" style="margin-bottom:8px;">
+        <div class="imp-drop-ico">&#128202;</div>
+        <div style="font-weight:600;">Chon file Excel (.xlsx .xls)</div>
+        <div style="font-size:11px;margin-top:4px;color:var(--mu);">Sheet 1, hang dau la header</div>
+      </div>
+      <input type="file" id="tcb-xlsx-inp" accept=".xlsx,.xls" style="display:none;" onchange="tcbReadXlsx(this)">
+    </div>
+
+    <!-- Preview -->
+    <div id="tcb-preview-wrap" style="display:none;margin-top:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;">Xem truoc</div>
+        <div id="tcb-stat" style="font-size:12px;"></div>
+      </div>
+      <div id="tcb-preview" style="background:var(--bg);border:1px solid var(--bd2);border-radius:10px;max-height:200px;overflow-y:auto;font-size:12px;margin-bottom:12px;"></div>
+      <button class="btnsave" id="tcb-save-btn" onclick="tcbSaveAll()">Luu tat ca vao app</button>
+    </div>
+
+    <button class="modal-no" onclick="closeOv('ov-tc-bulk')">Dong</button>
+  </div>
+</div>
 </body>
 </html>
